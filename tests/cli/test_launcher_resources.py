@@ -50,8 +50,9 @@ def test_cleanup_on_process_start_failure(
 
     launch_capture.on_start = fail_start
     if isinstance(failure, KeyboardInterrupt):
-        with pytest.raises(KeyboardInterrupt):
+        with pytest.raises(SystemExit) as exc:
             importlib.import_module(f"free_claude_code.cli.launchers.{name}").launch([])
+        assert exc.value.code == 130
     else:
         launch(name, [], exit_code=1)
     assert list(launcher_temp_dir_path().iterdir()) == []
@@ -127,9 +128,10 @@ def test_interrupt_kills_and_waits_for_registered_child_before_cleanup(
             "unregister_pid",
             side_effect=lambda pid: events.append("unregister"),
         ),
-        pytest.raises(KeyboardInterrupt),
+        pytest.raises(SystemExit) as exc,
     ):
         importlib.import_module("free_claude_code.cli.launchers.codex").launch([])
+    assert exc.value.code == 130
     assert events == ["register", "kill", "unregister"]
     assert process.wait.call_count == 2
     assert list(launcher_temp_dir_path().iterdir()) == []

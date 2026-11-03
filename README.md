@@ -379,6 +379,26 @@ Open **Admin UI → Model Config → Model Routing** and choose an effort beside
 
 <a id="connect-your-client"></a>
 
+### Restrict generation to approved models
+
+Set `FCC_ALLOWED_MODELS` in `~/.fcc/.env` to a JSON array of exact provider/model references, then restart FCC:
+
+```dotenv
+FCC_ALLOWED_MODELS='["nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b","nvidia_nim/minimaxai/minimax-m3.1-flash","nvidia_nim/nvidia/nemotron-3.5-lightning-30b-a3b"]'
+```
+
+Generation requests outside this list return an error before provider resolution, including manually selected models and tier overrides. Disallowed fallback models are skipped. An unset or empty list leaves routing unrestricted. The setting is configured through the environment file, not the Admin form. It controls FCC generation routes; it does not determine or guarantee a provider's pricing.
+
+### Check file and shell tools on a route
+
+From a source checkout, run the opt-in live check:
+
+```bash
+python scripts/check-model-tools.py --model nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+```
+
+The check makes model requests through `fcc-claude` in a temporary fixture directory. It requires successful read, write/edit and shell tool events, exact output and a verifier receipt. Text-only claims, failed tools and timeouts fail the check. It does not approve or activate models automatically. A successful fallback can satisfy a route check: use the `Model completed` server log to confirm which provider/model actually completed the request. The temporary directory is not an operating-system sandbox. Failed checks include a sanitized final CLI status, counts of completed/failed/unresolved file and shell tools, and an artifact-match flag. They never include prompts, tool arguments, file contents, or client stderr. A turn-limit error does not by itself mean the model never called tools.
+
 ## Connect Your Client
 
 FCC launchers automatically start the server.

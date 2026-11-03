@@ -1161,3 +1161,60 @@ async def test_empty_chunks_allow_caller_cancellation():
         with pytest.raises(asyncio.CancelledError):
             await task
     assert provider.stream_close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome", ["primary", "fallback", "failure", "cancel", "partial_cancel", "empty"]
+)
+async def test_model_completion_log_reports_only_completed_target(outcome: str) -> None:
+    primary = ControlledProvider(
+        []
+        if outcome == "empty"
+        else ["partial", asyncio.CancelledError()]
+        if outcome == "partial_cancel"
+        else ["primary-frame"]
+        if outcome == "primary"
+        else [asyncio.CancelledError()]
+        if outcome == "cancel"
+        else [_execution_failure("unavailable")]
+    )
+    fallback = ControlledProvider(
+        [_execution_failure("also unavailable")]
+        if outcome == "failure"
+        else ["fallback-frame"]
+    )
+
+    async def resolve(provider_id: str, _key: int) -> FakeProvider:
+        return {"provider": primary, "fallback": fallback}[provider_id]
+
+    executor = ProviderExecutor(resolve)
+    with patch("free_claude_code.application.execution.logger") as log:
+        stream = executor.stream_messages(
+            _routed_request(_target("fallback", "fallback-model")),
+            raw_log_payload=dict,
+            request_id="req_actual",
+        )
+        if outcome in {"failure", "cancel", "partial_cancel"}:
+            with pytest.raises((ExecutionFailure, asyncio.CancelledError)):
+                _ = [chunk async for chunk in stream]
+        else:
+            _ = [chunk async for chunk in stream]
+        completed = [
+            c.args
+            for c in log.info.call_args_list
+            if c.args[0].startswith("Model completed:")
+        ]
+    if outcome in {"failure", "cancel", "partial_cancel", "empty"}:
+        assert completed == []
+    else:
+        assert len(completed) == 1
+        assert completed[0][1:] == (
+            "req_actual",
+            "gateway-model",
+            "provider/provider-model"
+            if outcome == "primary"
+            else "fallback/fallback-model",
+            1 if outcome == "primary" else 2,
+            2,
+        )

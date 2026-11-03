@@ -139,6 +139,7 @@ class ModelRouter:
                 reasoning_preference.value,
             )
             primary = self._target(direct_provider_id, direct_provider_model)
+            self._ensure_allowed(primary)
             return ResolvedModelRoute(
                 original_model=claude_model_name,
                 primary=primary,
@@ -149,6 +150,7 @@ class ModelRouter:
         provider_model_ref = self._resolve_model_ref(claude_model_name)
         reasoning_preference = self._resolve_reasoning_preference(claude_model_name)
         primary = self._target_from_ref(provider_model_ref)
+        self._ensure_allowed(primary)
         if primary.provider_model != claude_model_name:
             logger.debug(
                 "MODEL MAPPING: '{}' -> '{}'",
@@ -193,8 +195,20 @@ class ModelRouter:
             for entry in self._settings.model_fallbacks or ()
         )
         return tuple(
-            candidate for candidate in configured if candidate.target != primary
+            candidate
+            for candidate in configured
+            if candidate.target != primary and self._is_allowed(candidate.target)
         )
+
+    def _is_allowed(self, target: ProviderModelTarget) -> bool:
+        allowed = self._settings.allowed_models
+        return not allowed or target.provider_model_ref in allowed
+
+    def _ensure_allowed(self, target: ProviderModelTarget) -> None:
+        if not self._is_allowed(target):
+            raise InvalidRequestError(
+                f"Model route '{target.provider_model_ref}' is not in FCC_ALLOWED_MODELS."
+            )
 
     def _validate_provider_id(self, provider_id: str) -> None:
         if provider_id not in self._settings.provider_ids:

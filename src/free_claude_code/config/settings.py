@@ -1,5 +1,6 @@
 """Pure, validated application settings schema."""
 
+import json
 from typing import Annotated
 
 from pydantic import (
@@ -53,6 +54,28 @@ def _validate_model_ref(value: str) -> str:
     return value
 
 
+def _parse_allowed_models(value: object) -> object:
+    if value is None or value == "":
+        return ()
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            raise ValueError(
+                "FCC_ALLOWED_MODELS must contain a valid JSON array."
+            ) from None
+    if isinstance(value, list | tuple):
+        return tuple(value)
+    raise ValueError("FCC_ALLOWED_MODELS must be an array of provider/model refs.")
+
+
+def _validate_allowed_model_ref(value: str) -> str:
+    _validate_model_ref(value)
+    if any(character.isspace() or character in "*?[]" for character in value):
+        raise ValueError("FCC_ALLOWED_MODELS entries must be exact canonical refs.")
+    return value
+
+
 class Settings(BaseModel):
     """Validated application settings with no file or process I/O."""
 
@@ -67,6 +90,9 @@ class Settings(BaseModel):
     custom_providers: Annotated[
         tuple[CustomProviderDefinition, ...], BeforeValidator(decode_custom_providers)
     ] = Field(default=(), validation_alias="FCC_CUSTOM_PROVIDERS")
+    allowed_models: Annotated[
+        tuple[str, ...], BeforeValidator(_parse_allowed_models)
+    ] = Field(default=(), validation_alias="FCC_ALLOWED_MODELS")
 
     @property
     def provider_ids(self) -> tuple[str, ...]:
@@ -87,6 +113,14 @@ class Settings(BaseModel):
         names = [item.display_name.casefold() for item in self.custom_providers]
         if len(ids) != len(set(ids)) or len(names) != len(set(names)):
             raise ValueError("Custom provider names and IDs must be unique")
+        if len(self.allowed_models) != len(set(self.allowed_models)):
+            raise ValueError("FCC_ALLOWED_MODELS entries must be unique")
+        for ref in self.allowed_models:
+            _validate_allowed_model_ref(ref)
+            if ref.partition("/")[0] not in self.provider_ids:
+                raise ValueError(
+                    "FCC_ALLOWED_MODELS: Invalid provider in model reference"
+                )
         for field in (
             "model",
             "model_fable",

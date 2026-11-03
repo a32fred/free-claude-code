@@ -2,7 +2,10 @@ from unittest.mock import patch
 
 import pytest
 
-from free_claude_code.application.errors import UnknownProviderError
+from free_claude_code.application.errors import (
+    InvalidRequestError,
+    UnknownProviderError,
+)
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
@@ -160,6 +163,60 @@ def test_model_router_resolves_default_model(settings):
     assert resolved.primary.provider_model_ref == "nvidia_nim/fallback-model"
     assert resolved.fallbacks == ()
     assert resolved.reasoning_preference is ReasoningPreference.CLIENT
+
+
+def test_allowed_models_reject_disallowed_configured_and_direct_routes():
+    router = ModelRouter(
+        Settings(model="groq/configured", FCC_ALLOWED_MODELS=("groq/approved",))
+    )
+    with pytest.raises(InvalidRequestError):
+        router.resolve("claude-sonnet-4")
+    with pytest.raises(InvalidRequestError):
+        router.resolve("groq/configured")
+
+
+def test_allowed_models_rejects_disallowed_legacy_tier_alias():
+    router = ModelRouter(
+        Settings(
+            model="groq/approved",
+            MODEL_OPUS="deepseek/private",
+            FCC_ALLOWED_MODELS=("groq/approved",),
+        )
+    )
+    with pytest.raises(InvalidRequestError):
+        router.resolve("claude-opus-4-20250514")
+
+
+def test_empty_allowed_models_keeps_routes_unrestricted():
+    assert (
+        ModelRouter(Settings(model="groq/configured"))
+        .resolve("groq/manual")
+        .primary.provider_model_ref
+        == "groq/manual"
+    )
+
+
+def test_allowed_models_enforces_decoded_gateway_model_exactly():
+    router = ModelRouter(Settings(FCC_ALLOWED_MODELS=("groq/approved",)))
+    with pytest.raises(InvalidRequestError):
+        router.resolve(desktop_model_id("groq/approved-plus"))
+
+
+def test_allowed_models_filters_fallbacks_and_keeps_approved_fallback():
+    router = ModelRouter(
+        Settings(
+            model="groq/approved",
+            FCC_ALLOWED_MODELS=("groq/approved", "open_router/safe/model"),
+            MODEL_FALLBACKS=(
+                ModelFallback(model="open_router/blocked/model"),
+                ModelFallback(model="open_router/safe/model"),
+            ),
+        )
+    )
+    route = router.resolve("claude-sonnet-4")
+    assert [candidate.target.provider_model_ref for candidate in route.fallbacks] == [
+        "open_router/safe/model"
+    ]
 
 
 def test_model_router_applies_opus_override(settings):
