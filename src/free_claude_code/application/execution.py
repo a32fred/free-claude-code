@@ -515,6 +515,15 @@ class ProviderExecutor:
                         )
 
                 if candidate_failure is None:
+                    if candidate_committed:
+                        logger.info(
+                            "Model completed: request_id={} requested={} actual={} candidate={}/{}",
+                            request_id,
+                            gateway_model,
+                            target.provider_model_ref,
+                            index + 1,
+                            len(candidates),
+                        )
                     return
                 recovery_action = "continue" if continuation is not None else "restart"
                 recovery_reason = "no_candidate_output"

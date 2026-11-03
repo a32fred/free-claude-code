@@ -401,7 +401,7 @@ def run_client_process(
         if process is not None and process.pid:
             kill_pid_tree_best_effort(process.pid)
             process.wait()
-        raise
+        raise SystemExit(130) from None
     finally:
         if process is not None and process.pid:
             unregister_pid(process.pid)
