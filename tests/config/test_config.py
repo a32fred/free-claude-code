@@ -649,6 +649,43 @@ def test_model_fallbacks_reject_blank_and_duplicate_members(value: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "value",
+    [
+        '["open_router/vendor/model-a", "groq/model-b"]',
+        ["open_router/vendor/model-a", "groq/model-b"],
+        ("open_router/vendor/model-a", "groq/model-b"),
+    ],
+)
+def test_allowed_models_parse_ordered_refs(value: object) -> None:
+    settings = Settings.model_validate({"FCC_ALLOWED_MODELS": value})
+    assert settings.allowed_models == (
+        "open_router/vendor/model-a",
+        "groq/model-b",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '["groq/model-a", "groq/model-a"]',
+        '["groq/"]',
+        '["*/*"]',
+        '["groq/model-a*"]',
+    ],
+)
+def test_allowed_models_reject_duplicates_and_noncanonical_refs(value: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"FCC_ALLOWED_MODELS": value})
+
+
+def test_allowed_models_preserve_provider_specific_exact_model_identifiers() -> None:
+    settings = Settings.model_validate(
+        {"FCC_ALLOWED_MODELS": '["bedrock/vendor/model@version+region%"]'}
+    )
+    assert settings.allowed_models == ("bedrock/vendor/model@version+region%",)
+
+
+@pytest.mark.parametrize(
     "field",
     ["MODEL", "HOST", "WHISPER_MODEL", "LOG_LEVEL", "ANTHROPIC_AUTH_TOKEN"],
 )
