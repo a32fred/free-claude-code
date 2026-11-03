@@ -19,9 +19,20 @@ from typing import Any
 MAX_TIMEOUT_SECONDS = 180
 MAX_TURNS = 5
 DEFAULT_TIMEOUT_SECONDS = 90
+TOOL_NAMES = {"Read", "Write", "Edit", "Bash"}
+FINAL_SUBTYPES = {
+    "success",
+    "error",
+    "error_max_turns",
+    "error_during_execution",
+    "error_max_budget_usd",
+    "error_max_structured_output_retries",
+}
 
 
-def _emit(status: str, *, model: str | None = None) -> int:
+def _emit(
+    status: str, *, model: str | None = None, diagnostics: dict[str, Any] | None = None
+) -> int:
     report: dict[str, Any] = {"status": status}
     if model:
         report.update(
@@ -29,8 +40,68 @@ def _emit(status: str, *, model: str | None = None) -> int:
             model_approval=False,
             note="Route capability only; verify provider completion logs for actual model identity.",
         )
+    if diagnostics is not None:
+        report["diagnostics"] = diagnostics
     print(json.dumps(report, separators=(",", ":")))
     return 0 if status == "route_capability_pass" else 1
+
+
+def _diagnostics(stdout: str, artifacts_match: bool) -> dict[str, Any]:
+    uses: dict[str, str] = {}
+    results: dict[str, bool] = {}
+    subtype = "unknown"
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "result":
+            value = event.get("subtype")
+            subtype = (
+                value
+                if isinstance(value, str) and value in FINAL_SUBTYPES
+                else "unknown"
+            )
+        message = event.get("message")
+        blocks = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if event.get("type") == "assistant" and block.get("type") == "tool_use":
+                name, tool_id = block.get("name"), block.get("id")
+                if (
+                    isinstance(name, str)
+                    and name in TOOL_NAMES
+                    and isinstance(tool_id, str)
+                ):
+                    uses[tool_id] = name
+            elif event.get("type") == "user" and block.get("type") == "tool_result":
+                tool_id = block.get("tool_use_id")
+                if isinstance(tool_id, str) and tool_id in uses:
+                    results[tool_id] = block.get("is_error") is not True
+    tool_counts = {
+        name: {
+            "completed": sum(
+                uses.get(key) == name and results.get(key) is True for key in uses
+            ),
+            "failed": sum(
+                uses.get(key) == name and results.get(key) is False for key in uses
+            ),
+            "unresolved": sum(
+                uses.get(key) == name and key not in results for key in uses
+            ),
+        }
+        for name in sorted(TOOL_NAMES)
+    }
+    return {
+        "final_subtype": subtype,
+        "tools": tool_counts,
+        "artifacts_match": artifacts_match,
+    }
 
 
 def _resolved(root: Path, path: object) -> Path | None:
@@ -241,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
         prompt = (
             f"Read {root / 'input.txt'}. Transform its content by replacing the initial "
             "probe: with TOOLS_OK: and write the result to output.txt in this workspace. "
+            "The output must end with exactly one LF newline (U+000A); do not omit it. "
             "Then use Bash to run python verify.py. Do not claim success without using those tools."
         )
         command = [
@@ -292,17 +364,21 @@ def main(argv: list[str] | None = None) -> int:
         except OSError:
             return _emit("cli_unavailable", model=args.model)
 
+        artifacts_match = _artifacts_match(root, nonce, expected)
+        diagnostics = _diagnostics(stdout, artifacts_match)
         if process.returncode != 0:
-            return _emit("cli_failed", model=args.model)
+            return _emit("cli_failed", model=args.model, diagnostics=diagnostics)
         required, failed, malformed = _has_required_use_events(stdout, root)
         if malformed:
-            return _emit("malformed_stream", model=args.model)
+            return _emit("malformed_stream", model=args.model, diagnostics=diagnostics)
         if failed:
-            return _emit("tool_failed", model=args.model)
+            return _emit("tool_failed", model=args.model, diagnostics=diagnostics)
         if not required:
-            return _emit("tool_evidence_missing", model=args.model)
-        if not _artifacts_match(root, nonce, expected):
-            return _emit("artifact_mismatch", model=args.model)
+            return _emit(
+                "tool_evidence_missing", model=args.model, diagnostics=diagnostics
+            )
+        if not artifacts_match:
+            return _emit("artifact_mismatch", model=args.model, diagnostics=diagnostics)
         return _emit("route_capability_pass", model=args.model)
 
 

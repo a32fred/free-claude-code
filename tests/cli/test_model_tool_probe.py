@@ -87,6 +87,7 @@ def _run_mocked(
     result_error=False,
     malformed_mode=None,
     interrupt=False,
+    result_subtype="success",
 ):
     observed = {}
 
@@ -108,6 +109,10 @@ def _run_mocked(
                 stdout = stdout.replace(
                     '"subtype": "success", "is_error": false',
                     '"subtype": "error", "is_error": true',
+                )
+            if result_subtype != "success":
+                stdout = stdout.replace(
+                    '"subtype": "success"', f'"subtype": "{result_subtype}"'
                 )
             if malformed_mode:
                 events = [json.loads(line) for line in stdout.splitlines()]
@@ -232,6 +237,34 @@ def test_nonzero_cli_exit_fails():
     status, result, _ = _run_mocked(returncode=1)
     assert status != 0
     assert result["status"] == "cli_failed"
+    assert result["diagnostics"]["final_subtype"] == "success"
+    assert result["diagnostics"]["tools"]["Read"] == {
+        "completed": 1,
+        "failed": 0,
+        "unresolved": 0,
+    }
+    assert result["diagnostics"]["tools"]["Write"] == {
+        "completed": 1,
+        "failed": 0,
+        "unresolved": 0,
+    }
+    assert result["diagnostics"]["tools"]["Bash"] == {
+        "completed": 1,
+        "failed": 0,
+        "unresolved": 0,
+    }
+    assert result["diagnostics"]["artifacts_match"] is True
+
+
+def test_error_max_turns_diagnostic_and_unknown_values_are_sanitized():
+    status, result, _ = _run_mocked(returncode=1, result_subtype="error_max_turns")
+    assert status != 0
+    assert result["diagnostics"]["final_subtype"] == "error_max_turns"
+    assert "prompt" not in json.dumps(result).lower()
+    assert "private stderr" not in json.dumps(result)
+
+    _, result, _ = _run_mocked(returncode=1, result_subtype="secret model text")
+    assert result["diagnostics"]["final_subtype"] == "unknown"
 
 
 def test_failed_tool_result_fails():
@@ -287,3 +320,51 @@ def test_unresolved_extra_tool_use_rejects_otherwise_successful_stream(tmp_path)
         "\n".join(events), tmp_path
     )
     assert malformed or failed or not required
+
+
+def test_diagnostics_tolerates_non_string_untrusted_names_and_subtypes():
+    stream = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "tool_use", "name": [], "id": "x"}]
+                    },
+                }
+            ),
+            json.dumps({"type": "result", "subtype": {"unexpected": "value"}}),
+        ]
+    )
+    report = probe._diagnostics(stream, False)
+    assert report["final_subtype"] == "unknown"
+    assert all(
+        count == 0 for tool in report["tools"].values() for count in tool.values()
+    )
+
+
+def test_probe_prompt_explicitly_requires_final_newline():
+    _, _, observed = _run_mocked()
+    argv = observed["argv"]
+    prompt = argv[argv.index("-p") + 1]
+    assert "one LF newline" in prompt
+
+
+def test_generated_verifier_accepts_exact_output_and_rejects_missing_newline(tmp_path):
+    import sys
+
+    source, expected, verifier = probe._fixture("abc123")
+    (tmp_path / "input.txt").write_text(source)
+    (tmp_path / "verify.py").write_text(verifier)
+    (tmp_path / "output.txt").write_text(expected)
+    good = subprocess.run(
+        [sys.executable, "verify.py"], cwd=tmp_path, capture_output=True
+    )
+    assert good.returncode == 0
+    assert probe._artifacts_match(tmp_path, "abc123", expected)
+    (tmp_path / "output.txt").write_text(expected.rstrip("\n"))
+    bad = subprocess.run(
+        [sys.executable, "verify.py"], cwd=tmp_path, capture_output=True
+    )
+    assert bad.returncode != 0
+    assert not probe._artifacts_match(tmp_path, "abc123", expected)

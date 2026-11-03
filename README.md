@@ -397,7 +397,7 @@ From a source checkout, run the opt-in live check:
 python scripts/check-model-tools.py --model nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
 ```
 
-The check makes model requests through `fcc-claude` in a temporary fixture directory. It requires successful read, write/edit and shell tool events, exact output and a verifier receipt. Text-only claims, failed tools and timeouts fail the check. It does not approve or activate models automatically. A successful fallback can satisfy a route check: use the `Model completed` server log to confirm which provider/model actually completed the request. The temporary directory is not an operating-system sandbox.
+The check makes model requests through `fcc-claude` in a temporary fixture directory. It requires successful read, write/edit and shell tool events, exact output and a verifier receipt. Text-only claims, failed tools and timeouts fail the check. It does not approve or activate models automatically. A successful fallback can satisfy a route check: use the `Model completed` server log to confirm which provider/model actually completed the request. The temporary directory is not an operating-system sandbox. Failed checks include a sanitized final CLI status, counts of completed/failed/unresolved file and shell tools, and an artifact-match flag. They never include prompts, tool arguments, file contents, or client stderr. A turn-limit error does not by itself mean the model never called tools.
 
 ## Connect Your Client
 

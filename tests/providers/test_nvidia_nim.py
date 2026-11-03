@@ -1021,8 +1021,14 @@ async def test_nim_normalization_preserves_reasoning_chunks(nim_provider):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_nim_structured_tool_arguments_are_preserved(wire):
-    arguments = '{ "path": "README.md", "options": {"count": 2, "enabled": true}, "tags": ["a", "b"] }'
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '{ "path": "README.md", "options": {"count": 2, "enabled": true}, "tags": ["a", "b"] }',
+        json.dumps({"path": "output.txt", "content": "TOOLS_OK:nonce\n"}),
+    ],
+)
+async def test_nim_structured_tool_arguments_are_preserved(wire, arguments):
     async with _harness(
         "chat",
         lambda _: (200, tool_events("chat", arguments)),
